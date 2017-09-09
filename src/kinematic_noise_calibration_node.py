@@ -28,6 +28,8 @@ import threading
 import numpy as np
 import struct
 import math
+import yaml
+from datetime import datetime
 
 class NoiseFromRobot(object):
     def __init__(self):
@@ -132,18 +134,32 @@ class NoiseFromRobot(object):
             N = len(Trans)
             cov_fusion = [np.diag([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])] * N
             Tmean, Tsigma = SE3Lib.Fusing(Trans, cov_fusion)
+            #print('Tmean')
             #print(Tmean)
+
+            # compute deviation
             errors = []
             for T in Trans:
-                errors.append(SE3Lib.TranToVec(SE3Lib.TransformInv(Tmean) * T))
-            # compute standard deviation per axis
-            err = np.mean(np.array(errors), axis=0, dtype=np.float64)
-            #print(err)
-            #print(np.multiply(err,err))
-            cov[l] = np.sqrt(np.multiply(err, err))
+                xi = SE3Lib.TranToVec(SE3Lib.TransformInv(Tmean) * T)
+                errors.append(xi)
+
+            mean_cov = np.zeros((6, 6), dtype=float)
+            for xi in errors:
+                mean_cov = mean_cov + np.outer(xi,xi);
+            #print(errors)
+            #print(mean_cov)
+            mean_cov = mean_cov / len(errors)
+            cov[l] = mean_cov
 
         for key in cov:
-            print('%s:\t std_x: %f, std_y: %f, std_z: %f, std_roll: %f, std_pitch: %f, std_yaw: %f' % (key, cov[l][0], cov[l][1], cov[l][2], cov[l][3], cov[l][4], cov[l][5]) )
+            print('%s:' % key )
+            print(cov[key])
+
+        now = datetime.now()
+        filename = "covariances/cov_%s_%s_%s_%s_%s_%s.yaml" % (now.year, now.month, now.day, now.hour, now.minute, now.second)
+        np.save(filename, cov)
+        #with open(filename, 'w') as outfile:
+        #    yaml.dump(cov, outfile, default_flow_style=False)
 
     def read_parameter(self, name, default):
         """
