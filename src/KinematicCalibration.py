@@ -29,6 +29,7 @@ import struct
 import math
 import yaml
 from datetime import datetime
+import distutils.dir_util
 
 # Utils
 import SE3UncertaintyLib as SE3Lib
@@ -37,6 +38,9 @@ class KinematicCalibration():
     def __init__(self, mode='alignment'):
 
         self.mode = mode
+
+        # numpy print options
+        np.set_printoptions(precision=10, suppress=True)
 
         # Read parameters to configure the node
         self.topic_gt_torso = self.read_parameter('~topic_gt_torso', 'rigid_body_2')
@@ -56,10 +60,10 @@ class KinematicCalibration():
         self.script_dir = self.rospack.get_path('kinematic_noise_calibration')
 
         # create some dirs for configs
-        self.align_dir = self.script_dir + 'align_config/'
-        os.makedirs(self.align_dir, exist_ok=True)
-        self.covariance_dir = self.script_dir + 'covariances/'
-        os.makedirs(self.covariance_dir, exist_ok=True)
+        self.align_dir = self.script_dir + '/alignment_config/'
+        distutils.dir_util.mkpath(self.align_dir)
+        self.covariance_dir = self.script_dir + '/covariances/'
+        distutils.dir_util.mkpath(self.covariance_dir)
 
 
         # lists to save transformations
@@ -171,7 +175,7 @@ class KinematicCalibration():
             position, quaternion = self.transform_listener.lookupTransform(self.topic_robot_rfoot, self.topic_robot_torso, t)
             self.tf_robot_T_t_rf.append(self.position_quaternion_to_matrix(position, quaternion))
 
-    def gauss_newton_alignment(self, Qlist, Plist):
+    def gauss_newton_alignment(self, listRef, listEst):
         """
         Gauss Newton following the method from:
         Salas, M., & Reid, I. D. (2015). Trajectory Alignment and Evaluation in SLAM : Horn's Method vs Alignment on the Manifold.
@@ -195,12 +199,12 @@ class KinematicCalibration():
             RHS = np.zeros(6)
 
             # align head frames
-            for Q,P in zip(Qlist, Plist):
-                invQ = np.linalg.inv(Q)
+            for Ref,Est in zip(listRef, listEst):
+                invRef = np.linalg.inv(Ref)
 
-                delta_k = SE3Lib.TranToVec(np.dot(np.dot(invQ, T), P)) # Eq. 2: Log(Qi^-1 * T * Pi)
+                delta_k = SE3Lib.TranToVec(np.dot(np.dot(invRef, T), Est)) # Eq. 2: Log(Qi^-1 * T * Pi)
 
-                Jac = SE3Lib.TranAd(invQ)           # approximation of the Jacobian by the SE(3) Adjoint (Eq. 18)
+                Jac = SE3Lib.TranAd(invRef)           # approximation of the Jacobian by the SE(3) Adjoint (Eq. 18)
                 JacT = Jac.T
                 LHS = LHS + np.dot(JacT, Jac)      # we do not weight by the information matrix
                 RHS = RHS + np.dot(JacT, delta_k)
@@ -214,8 +218,8 @@ class KinematicCalibration():
 
             # Check the cost function
             V = 0.
-            for Q,P in zip(self.tf_gt_T_t_h, self.tf_robot_T_t_h):
-              delta_k = SE3Lib.TranToVec(np.dot(np.dot(Q, T), P))
+            for Ref,Est in zip(listRef, listEst):
+              delta_k = SE3Lib.TranToVec(np.dot(np.dot(Ref, T), Est))
               V = V + np.dot(delta_k.T,delta_k)
             if abs(V - Vprev) < 1e-10:
               break
@@ -261,19 +265,16 @@ class KinematicCalibration():
 
     def read_alignment(self):
         # read head alignment
-        with load(self.align_dir + 'head.npy', Th) as data:
-            self.align_T_h = data
+        self.align_T_h = np.load(self.align_dir + 'head.npy')
 
         # read left foot alignment
-        with load(self.align_dir + 'lf.npy', Th) as data:
-            self.align_T_lf = data
+        self.align_T_lf = np.load(self.align_dir + 'lf.npy')
 
         # read head alignment
-        with load(self.align_dir + 'rf.npy', Th) as data:
-            self.align_T_rf = data
+        self.align_T_rf = np.load(self.align_dir + 'rf.npy')
 
 
-    def compute_covariances(self):
+    def empirical_covariance(self, Reflist, Estlist, Talign):
         """
         Computes the empirical covariance of a list of transformations
 
@@ -281,40 +282,57 @@ class KinematicCalibration():
         Springer Tracts in Advanced Robotics, 47, 155–168.
         """
 
-        cov = {}
-        stds = {}
+        cov = np.zeros((6, 6), dtype=float)
+        for Ref, Est in zip(Reflist, Estlist):
+            invRef = np.linalg.inv(Ref)
 
-        for key in self.transformations:
-            #print(l)
-            N = len(self.transformations[key])
-            cov_fusion = [np.diag([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])] * N
-            Tmean, Tsigma = SE3Lib.Fusing(self.transformations[key], cov_fusion)
-            #print('Tmean')
-            #print(Tmean)
+            err = SE3Lib.TranToVec(np.dot(np.dot(invRef, Talign), Est)) # error from predicted kinematics and ground truth, in kinematic frame
+            cov = cov + np.outer(err,err);
 
-            # compute deviation
-            errors = []
-            for T in self.transformations[key]:
-                xi = SE3Lib.TranToVec(SE3Lib.TransformInv(Tmean) * T)
-                errors.append(xi)
+        cov = cov / len(Reflist)
 
-            mean_cov = np.zeros((6, 6), dtype=float)
-            for xi in errors:
-                mean_cov = mean_cov + np.outer(xi,xi);
+        return cov
 
-            mean_cov = mean_cov / len(errors)
-            cov[key] = mean_cov
-            stds[key] = np.sqrt(np.diag(mean_cov))
 
-        for key in cov:
-            print('%s:' % key )
-            print(stds[key])
+    def compute_covariances(self, verbose=True):
+        """
+        Computes the empirical covariance for the head, left foot and right foot predictions
 
-            now = datetime.now()
-            filename = 'covariances/std_%s_%s_%s_%s_%s_%s_%s.yaml' % (key, now.year, now.month, now.day, now.hour, now.minute, now.second)
-            #np.savetxt(filename, cov)
-            with open(filename, 'w') as outfile:
-                yaml.dump(list(stds), outfile, default_flow_style=False)
+        """
+
+        # head covariance
+        Sigmah = self.empirical_covariance(self.tf_robot_T_t_h, self.tf_gt_T_t_h, self.align_T_h)
+        #np.save(self.align_dir + 'head.npy', Th)
+        if verbose:
+            print('Head covariance')
+            print(Sigmah)
+
+        # left foot covariance
+        Sigmalf = self.empirical_covariance(self.tf_robot_T_t_lf, self.tf_gt_T_t_lf, self.align_T_lf)
+        #np.save(self.align_dir + 'lf.npy', Tlf)
+        if verbose:
+            print('Left foot covariance')
+            print(Sigmalf)
+
+        # right foot covariance
+        Sigmarf = self.empirical_covariance(self.tf_robot_T_t_rf, self.tf_gt_T_t_rf, self.align_T_rf)
+        #np.save(self.align_dir + 'rf.npy', Trf)
+        if verbose:
+            print('Right foot covariance')
+            print(Sigmarf)
+
+
+        #stds[key] = np.sqrt(np.diag(mean_cov))
+
+        #for key in cov:
+        #    print('%s:' % key )
+        #    print(stds[key])
+
+        #    now = datetime.now()
+        #    filename = 'covariances/std_%s_%s_%s_%s_%s_%s_%s.yaml' % (key, now.year, now.month, now.day, now.hour, now.minute, now.second)
+        #    #np.savetxt(filename, cov)
+        #    with open(filename, 'w') as outfile:
+        #        yaml.dump(list(stds), outfile, default_flow_style=False)
 
     def read_parameter(self, name, default):
         """

@@ -1,11 +1,9 @@
 #!/usr/bin/env python
-
 import os
 
 # ROS stuff
 import rospy
 from KinematicCalibration import *
-
 
 if __name__ == '__main__':
     node_name = os.path.splitext(os.path.basename(__file__))[0]
