@@ -26,6 +26,7 @@ import os
 from time import time, sleep
 import threading
 import numpy as np
+import scipy.linalg
 import struct
 import math
 import yaml
@@ -38,8 +39,8 @@ class NoiseFromRobot(object):
 
         self.topic_gt_torso = self.read_parameter('~topic_gt_torso', 'rigid_body_2')
         self.topic_gt_head  = self.read_parameter('~topic_gt_head' , 'rigid_body_1')
-        self.topic_gt_lfoot = self.read_parameter('~topic_gt_lfoot', 'rigid_body_4')
-        self.topic_gt_rfoot = self.read_parameter('~topic_gt_rfoot', 'rigid_body_5')
+        self.topic_gt_lfoot = self.read_parameter('~topic_gt_lfoot', 'rigid_body_5')
+        self.topic_gt_rfoot = self.read_parameter('~topic_gt_rfoot', 'rigid_body_4')
 
         self.topic_robot_torso = self.read_parameter('~topic_robot_torso', 'torso')
         self.topic_robot_head  = self.read_parameter('~topic_robot_head' , 'gaze')
@@ -122,9 +123,13 @@ class NoiseFromRobot(object):
             position, quaternion = self.transform_listener.lookupTransform(self.topic_robot_rfoot, self.topic_robot_torso, t)
             self.tf_robot_T_t_rf.append(self.position_quaternion_to_matrix(position, quaternion))
 
+    def align_kinematics_and_groundtruth(self):
+        
+
     def compute_noises(self):
         rospy.loginfo('Not implemented yet')
         cov = {}
+        stds = {}
 
         labels = ['gt_torso_head', 'gt_torso_lfoot', 'gt_torso_rfoot', 'robot_torso_head', 'robot_torso_lfoot', 'robot_torso_rfoot']
         transformations = [self.tf_gt_T_t_h, self.tf_gt_T_t_lf, self.tf_gt_T_t_rf, self.tf_robot_T_t_h, self.tf_robot_T_t_lf, self.tf_robot_T_t_rf]
@@ -150,16 +155,17 @@ class NoiseFromRobot(object):
             #print(mean_cov)
             mean_cov = mean_cov / len(errors)
             cov[l] = mean_cov
+            stds[l] = np.sqrt(np.diag(mean_cov))
 
         for key in cov:
             print('%s:' % key )
-            print(cov[key])
+            print(stds[key])
 
-        now = datetime.now()
-        filename = "covariances/cov_%s_%s_%s_%s_%s_%s.yaml" % (now.year, now.month, now.day, now.hour, now.minute, now.second)
-        np.save(filename, cov)
-        #with open(filename, 'w') as outfile:
-        #    yaml.dump(cov, outfile, default_flow_style=False)
+            now = datetime.now()
+            filename = "covariances/std_%s_%s_%s_%s_%s_%s_%s.yaml" % (key, now.year, now.month, now.day, now.hour, now.minute, now.second)
+            #np.savetxt(filename, cov)
+            with open(filename, 'w') as outfile:
+                yaml.dump(list(stds), outfile, default_flow_style=False)
 
     def read_parameter(self, name, default):
         """
