@@ -232,9 +232,6 @@ class KinematicCalibration():
         Aligns ground truth and robots frames using alignment on the manifold
         We use the kinematic frame as the reference frame, so the alignment transformation converts the ground truth frame into the corresponding kinematic one
 
-        Salas, M., & Reid, I. D. (2015). Trajectory Alignment and Evaluation in SLAM : Horn's Method vs Alignment on the Manifold.
-        In RSS Workshop: The Problem of Mobile Sensors.
-
         """
 
         now = datetime.now()
