@@ -187,7 +187,7 @@ class KinematicCalibration():
 
         # gauss newton
         iterations = 100
-        N = len(self.tf_gt_T_t_h)
+        N = len(self.listRef)
         Vprev = 0   # previous value of the cost function
 
         # the optimal alignment transformation
@@ -219,7 +219,7 @@ class KinematicCalibration():
             # Check the cost function
             V = 0.
             for Ref,Est in zip(listRef, listEst):
-              delta_k = SE3Lib.TranToVec(np.dot(np.dot(Ref, T), Est))
+              delta_k = SE3Lib.TranToVec(np.dot(np.dot(invRef, T), Est))
               V = V + np.dot(delta_k.T,delta_k)
             if abs(V - Vprev) < 1e-10:
               break
